@@ -41,7 +41,8 @@ from crits.services.handlers import get_config
 from crits.vocabulary.ips import IPTypes
 from crits.vocabulary.relationships import RelationshipTypes
 
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
+logger = logging.getLogger("crits")
 
 def execute_taxii_agent(hostname=None, https=None, feed=None, keyfile=None,
                         certfile=None, start=None, end=None, analyst=None,
