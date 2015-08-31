@@ -2,6 +2,7 @@ from crits.core.crits_mongoengine import EmbeddedObject
 from crits.vocabulary.indicators import IndicatorTypes
 from crits.vocabulary.ips import IPTypes
 from crits.vocabulary.events import EventTypes
+from crits.vocabulary.relationships import RelationshipTypes
 from crits.vocabulary.actors import (
     ThreatTypes,
     Sophistications,
@@ -64,12 +65,48 @@ def get_crits_ip_type(type_):
     else:
         return None
 
+def get_crits_relationship_type(type_):
+    if   type_ == "Compressed_From": return RelationshipTypes.COMPRESSED_FROM
+    elif type_ == "Compressed_Into": return RelationshipTypes.COMPRESSED_INTO
+    elif type_ == "Connected_From": return RelationshipTypes.CONNECTED_FROM
+    elif type_ == "Connected_To": return RelationshipTypes.CONNECTED_TO
+    elif type_ == "Contained_Within": return RelationshipTypes.CONTAINED_WITHIN
+    elif type_ == "Contains": return RelationshipTypes.CONTAINS
+    elif type_ == "Created": return RelationshipTypes.CREATED
+    elif type_ == "Created_By": return RelationshipTypes.CREATED_BY
+    elif type_ == "Decrypted": return RelationshipTypes.DECRYPTED
+    elif type_ == "Decrypted_By": return RelationshipTypes.DECRYPTED_BY
+    elif type_ == "Downloaded": return RelationshipTypes.DOWNLOADED
+    elif type_ == "Downloaded_By": return RelationshipTypes.DOWNLOADED_BY
+    elif type_ == "Downloaded_From": return RelationshipTypes.DOWNLOADED_FROM
+    elif type_ == "Downloaded_To": return RelationshipTypes.DOWNLOADED_TO
+    elif type_ == "Dropped": return RelationshipTypes.DROPPED
+    elif type_ == "Dropped_By": return RelationshipTypes.DROPPED_BY
+    elif type_ == "Installed": return RelationshipTypes.INSTALLED
+    elif type_ == "Installed_By": return RelationshipTypes.INSTALLED_BY
+    elif type_ == "Loaded_From": return RelationshipTypes.LOADED_FROM
+    elif type_ == "Loaded_Into": return RelationshipTypes.LOADED_INTO
+    elif type_ == "Packed_From": return RelationshipTypes.PACKED_FROM
+    elif type_ == "Packed_Into": return RelationshipTypes.PACKED_INTO
+    elif type_ == "Received_From": return RelationshipTypes.RECEIVED_FROM
+    #elif type_ == "": return RelationshipTypes.REGISTERED
+    #elif type_ == "": return RelationshipTypes.REGISTERED_TO
+    elif type_ == "Related_To": return RelationshipTypes.RELATED_TO
+    elif type_ == "Resolved_To": return RelationshipTypes.RESOLVED_TO
+    elif type_ == "Sent": return RelationshipTypes.SENT
+    elif type_ == "Sent_By": return RelationshipTypes.SENT_BY
+    elif type_ == "Sent_To": return RelationshipTypes.SENT_TO
+    elif type_ == "Sub-domain_Of": return RelationshipTypes.SUB_DOMAIN_OF
+    elif type_ == "Supra-domain_Of": return RelationshipTypes.SUPRA_DOMAIN_OF
+    
+    return RelationshipTypes.RELATED_TO
+
 def get_crits_event_type(type_):
     """
     Currently I am not sure what the best matches are and I think it's best to
     leave this up to CybOX/STIX people to map to CRITs vocabulary.
     """
-
+    
     return EventTypes.INTEL_SHARING
 
 def get_crits_actor_tags(type_):

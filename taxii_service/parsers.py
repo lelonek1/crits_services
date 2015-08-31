@@ -6,7 +6,8 @@ from .object_mapper import (
     make_crits_object,
     get_crits_actor_tags,
     get_crits_ip_type,
-    get_crits_event_type
+    get_crits_event_type,
+    get_crits_relationship_type
 )
 
 from crits.actors.actor import Actor
@@ -38,6 +39,9 @@ from cybox.objects.file_object import File
 
 from stix.common import StructuredText
 from stix.core import STIXPackage, STIXHeader
+
+import logging
+logger = logging.getLogger("crits")
 
 class STIXParserException(Exception):
     """
@@ -137,13 +141,16 @@ class STIXParser():
                 if header.title:
                     title = header.title
                 if hasattr(header, 'package_intents'):
-                    stix_type = str(header.package_intents[0])
-                    event_type = get_crits_event_type(stix_type)
+                    try:
+                        stix_type = str(header.package_intents[0])
+                        event_type = get_crits_event_type(stix_type)
+                    except:
+                        pass
                 if header.description:
                     description = header.description
                     if isinstance(description, StructuredText):
                         try:
-                            description = description.to_dict()
+                            description = str(description.to_dict())
                         except:
                             pass
             res = add_new_event(title,
@@ -268,30 +275,187 @@ class STIXParser():
                         self.imported[indicator.id_] = result
                     continue
 
-            for observable in indicator.observables: # get each observable from indicator (expecting only 1)
-                try: # create CRITs Indicator from observable
-                    item = observable.object_.properties
-                    obj = make_crits_object(item)
-                    ind_type = obj.object_type
-                    for value in obj.value:
-                        if value and ind_type:
-                            res = handle_indicator_ind(value.strip(),
-                                                       self.source,
-                                                       ind_type,
-                                                       IndicatorThreatTypes.UNKNOWN,
-                                                       IndicatorAttackTypes.UNKNOWN,
-                                                       analyst,
-                                                       add_domain=True,
-                                                       add_relationship=True)
-                            if res['success']:
-                                self.imported[indicator.id_] = (Indicator._meta['crits_type'],
-                                                                res['object'])
-                            else:
-                                self.failed.append((res['message'],
-                                                    type(item).__name__,
-                                                    item.parent.id_)) # note for display in UI
-                except Exception, e: # probably caused by cybox object we don't handle
-                    self.failed.append((e.message, type(item).__name__, item.parent.id_)) # note for display in UI
+            if indicator.observables:
+                self.parse_observables(indicator.observables)
+            else:
+                logger.warning("No observables found in file")
+            '''for observable in indicator.observables: # get each observable from indicator (expecting only 1)
+                if observable.object_:
+                    try: # create CRITs Indicator from observable
+                        item = observable.object_.properties
+                        obj = make_crits_object(item)
+                        ind_type = obj.object_type
+                        for value in obj.value:
+                            if value and ind_type:
+                                res = handle_indicator_ind(value.strip(),
+                                                           self.source,
+                                                           ind_type,
+                                                           IndicatorThreatTypes.UNKNOWN,
+                                                           IndicatorAttackTypes.UNKNOWN,
+                                                           analyst,
+                                                           add_domain=True,
+                                                           add_relationship=True)
+                                if res['success']:
+                                    self.imported[indicator.id_] = (Indicator._meta['crits_type'],
+                                                                    res['object'])
+                                else:
+                                    self.failed.append((res['message'],
+                                                        type(item).__name__,
+                                                        item.parent.id_)) # note for display in UI
+                    except Exception as e: # probably caused by cybox object we don't handle
+                        logger.exception(e)
+                        logger.info([observable,observable.to_dict()])
+                        self.failed.append((e.message, type(item).__name__, item.parent.id_)) # note for display in UI
+                else:
+                    '''
+
+    def parse_object(self, obj):
+        item = obj.properties
+        if isinstance(item, Address):
+            if item.category in ('cidr', 'ipv4-addr', 'ipv4-net',
+                                 'ipv4-netmask', 'ipv6-addr',
+                                 'ipv6-net', 'ipv6-netmask'):
+                imp_type = "IP"
+                for value in item.address_value.values:
+                    ip = str(value).strip()
+                    iptype = get_crits_ip_type(item.category)
+                    if iptype:
+                        res = ip_add_update(ip,
+                                            iptype,
+                                            [self.source],
+                                            analyst=analyst,
+                                            is_add_indicator=True)
+                        self.parse_res(imp_type, obs, res)
+        if isinstance(item, DomainName):
+            imp_type = "Domain"
+            for value in item.value.values:
+                res = upsert_domain(str(value),
+                                    [self.source],
+                                    username=analyst)
+                self.parse_res(imp_type, obs, res)
+        elif isinstance(item, Artifact):
+            # Not sure if this is right, and I believe these can be
+            # encoded in a couple different ways.
+            imp_type = "RawData"
+            rawdata = item.data.decode('utf-8')
+            description = "None"
+            # TODO: find out proper ways to determine title, datatype,
+            #       tool_name, tool_version
+            title = "Artifact for Event: STIX Document %s" % self.package.id_
+            res = handle_raw_data_file(rawdata,
+                                    self.source.name,
+                                    user=analyst,
+                                    description=description,
+                                    title=title,
+                                    data_type="Text",
+                                    tool_name="STIX",
+                                    tool_version=None,
+                                    method=self.source_instance.method,
+                                    reference=self.source_instance.reference)
+            self.parse_res(imp_type, obs, res)
+        elif (isinstance(item, File) and
+              item.custom_properties and
+              item.custom_properties[0].name == "crits_type" and
+              item.custom_properties[0]._value == "Certificate"):
+            imp_type = "Certificate"
+            description = "None"
+            filename = str(item.file_name)
+            data = None
+            for obj in item.parent.related_objects:
+                if isinstance(obj.properties, Artifact):
+                    data = obj.properties.data
+            res = handle_cert_file(filename,
+                                   data,
+                                   self.source,
+                                   user=analyst,
+                                   description=description)
+            self.parse_res(imp_type, obs, res)
+        elif isinstance(item, File) and self.has_network_artifact(item):
+            imp_type = "PCAP"
+            description = "None"
+            filename = str(item.file_name)
+            data = None
+            for obj in item.parent.related_objects:
+                if (isinstance(obj.properties, Artifact) and
+                    obj.properties.type_ == Artifact.TYPE_NETWORK):
+                    data = obj.properties.data
+            res = handle_pcap_file(filename,
+                                   data,
+                                   self.source,
+                                   user=analyst,
+                                   description=description)
+            self.parse_res(imp_type, obs, res)
+        elif isinstance(item, File):
+            imp_type = "Sample"
+            filename = str(item.file_name)
+            md5 = item.md5
+            data = None
+            for obj in item.parent.related_objects:
+                if (isinstance(obj.properties, Artifact) and
+                    obj.properties.type_ == Artifact.TYPE_FILE):
+                    data = obj.properties.data
+            res = handle_file(filename,
+                              data,
+                              self.source,
+                              user=analyst,
+                              md5_digest=md5,
+                              is_return_only_md5=False)
+            self.parse_res(imp_type, obs, res)
+        elif isinstance(item, EmailMessage):
+            imp_type = "Email"
+            data = {}
+            data['source'] = self.source.name
+            data['source_method'] = self.source_instance.method
+            data['source_reference'] = self.source_instance.reference
+            data['raw_body'] = str(item.raw_body)
+            data['raw_header'] = str(item.raw_header)
+            data['helo'] = str(item.email_server)
+            if item.header:
+                data['message_id'] = str(item.header.message_id)
+                data['subject'] = str(item.header.subject)
+                data['sender'] = str(item.header.sender)
+                data['reply_to'] = str(item.header.reply_to)
+                data['x_originating_ip'] = str(item.header.x_originating_ip)
+                data['x_mailer'] = str(item.header.x_mailer)
+                data['boundary'] = str(item.header.boundary)
+                data['from_address'] = str(item.header.from_)
+                data['date'] = item.header.date.value
+                if item.header.to:
+                    data['to'] = [str(r) for r in item.header.to.to_list()]
+            res = handle_email_fields(data,
+                                    analyst,
+                                    "STIX")
+            # Should check for attachments and add them here.
+            self.parse_res(imp_type, obs, res)
+            if res.get('status') and item.attachments:
+                for attach in item.attachments:
+                    rel_id = attach.to_dict()['object_reference']
+                    self.relationships.append((obs.id_,
+                                               "Contains",
+                                               rel_id, "High"))
+        else: # try to parse all other possibilities as Indicator
+            imp_type = "Indicator"
+            obj = make_crits_object(item)
+            if obj.object_type == 'Address' and 
+                  item.category in ('cidr', 'ipv4-addr', 'ipv4-net',
+                                 'ipv4-netmask', 'ipv6-addr',
+                                 'ipv6-net', 'ipv6-netmask'):
+                # This was already caught above
+                
+            else:
+                ind_type = obj.object_type
+                for value in obj.value:
+                    if value and ind_type:
+                        res = handle_indicator_ind(value.strip(),
+                                                self.source,
+                                                ind_type,
+                                                IndicatorThreatTypes.UNKNOWN,
+                                                IndicatorAttackTypes.UNKNOWN,
+                                                analyst,
+                                                add_domain=True,
+                                                add_relationship=True)
+                        self.parse_res(imp_type, obs, res)
+        
 
     def parse_observables(self, observables):
         """
@@ -304,153 +468,34 @@ class STIXParser():
         analyst = self.source_instance.analyst
         for obs in observables: # for each STIX observable
             if not obs.object_ or not obs.object_.properties:
-                self.failed.append(("No valid object_properties was found!",
-                                    type(obs).__name__,
-                                    obs.id_)) # note for display in UI
+                if obs._observable_composition:
+                    '''self.failed.append(("Observable compositions are currently unsupported.",
+                                        type(obs).__name__,
+                                        obs.id_)) # note for display in UI'''
+                    imp_type = "Indicator"
+                    value = "observable composition: {}; operator: {}".format(obs.id_, obs._observable_composition.operator)
+
+                    ind_type = IndicatorTypes.OTHER
+                    res = handle_indicator_ind(value.strip(),
+                                            self.source,
+                                            ind_type,
+                                            IndicatorThreatTypes.UNKNOWN,
+                                            IndicatorAttackTypes.UNKNOWN,
+                                            analyst)
+                    self.parse_res(imp_type, obs, res)
+
+                    #TODO: Can compositions have relationships?
+                elif obs.idref:
+                    
+                elif obs.object_.idref:
+                    
+                else:
+                    self.failed.append(("No valid object_properties was found!",
+                                        type(obs).__name__,
+                                        obs.id_)) # note for display in UI
                 continue
             try: # try to create CRITs object from observable
-                item = obs.object_.properties
-                if isinstance(item, Address):
-                    if item.category in ('cidr', 'ipv4-addr', 'ipv4-net',
-                                         'ipv4-netmask', 'ipv6-addr',
-                                         'ipv6-net', 'ipv6-netmask'):
-                        imp_type = "IP"
-                        for value in item.address_value.values:
-                            ip = str(value).strip()
-                            iptype = get_crits_ip_type(item.category)
-                            if iptype:
-                                res = ip_add_update(ip,
-                                                    iptype,
-                                                    [self.source],
-                                                    analyst=analyst,
-                                                    is_add_indicator=True)
-                                self.parse_res(imp_type, obs, res)
-                if isinstance(item, DomainName):
-                    imp_type = "Domain"
-                    for value in item.value.values:
-                        res = upsert_domain(str(value),
-                                            [self.source],
-                                            username=analyst)
-                        self.parse_res(imp_type, obs, res)
-                elif isinstance(item, Artifact):
-                    # Not sure if this is right, and I believe these can be
-                    # encoded in a couple different ways.
-                    imp_type = "RawData"
-                    rawdata = item.data.decode('utf-8')
-                    description = "None"
-                    # TODO: find out proper ways to determine title, datatype,
-                    #       tool_name, tool_version
-                    title = "Artifact for Event: STIX Document %s" % self.package.id_
-                    res = handle_raw_data_file(rawdata,
-                                            self.source.name,
-                                            user=analyst,
-                                            description=description,
-                                            title=title,
-                                            data_type="Text",
-                                            tool_name="STIX",
-                                            tool_version=None,
-                                            method=self.source_instance.method,
-                                            reference=self.source_instance.reference)
-                    self.parse_res(imp_type, obs, res)
-                elif (isinstance(item, File) and
-                      item.custom_properties and
-                      item.custom_properties[0].name == "crits_type" and
-                      item.custom_properties[0]._value == "Certificate"):
-                    imp_type = "Certificate"
-                    description = "None"
-                    filename = str(item.file_name)
-                    data = None
-                    for obj in item.parent.related_objects:
-                        if isinstance(obj.properties, Artifact):
-                            data = obj.properties.data
-                    res = handle_cert_file(filename,
-                                           data,
-                                           self.source,
-                                           user=analyst,
-                                           description=description)
-                    self.parse_res(imp_type, obs, res)
-                elif isinstance(item, File) and self.has_network_artifact(item):
-                    imp_type = "PCAP"
-                    description = "None"
-                    filename = str(item.file_name)
-                    data = None
-                    for obj in item.parent.related_objects:
-                        if (isinstance(obj.properties, Artifact) and
-                            obj.properties.type_ == Artifact.TYPE_NETWORK):
-                            data = obj.properties.data
-                    res = handle_pcap_file(filename,
-                                           data,
-                                           self.source,
-                                           user=analyst,
-                                           description=description)
-                    self.parse_res(imp_type, obs, res)
-                elif isinstance(item, File):
-                    imp_type = "Sample"
-                    filename = str(item.file_name)
-                    md5 = item.md5
-                    data = None
-                    for obj in item.parent.related_objects:
-                        if (isinstance(obj.properties, Artifact) and
-                            obj.properties.type_ == Artifact.TYPE_FILE):
-                            data = obj.properties.data
-                    res = handle_file(filename,
-                                      data,
-                                      self.source,
-                                      user=analyst,
-                                      md5_digest=md5,
-                                      is_return_only_md5=False)
-                    self.parse_res(imp_type, obs, res)
-                elif isinstance(item, EmailMessage):
-                    imp_type = "Email"
-                    data = {}
-                    data['source'] = self.source.name
-                    data['source_method'] = self.source_instance.method
-                    data['source_reference'] = self.source_instance.reference
-                    data['raw_body'] = str(item.raw_body)
-                    data['raw_header'] = str(item.raw_header)
-                    data['helo'] = str(item.email_server)
-                    if item.header:
-                        data['message_id'] = str(item.header.message_id)
-                        data['subject'] = str(item.header.subject)
-                        data['sender'] = str(item.header.sender)
-                        data['reply_to'] = str(item.header.reply_to)
-                        data['x_originating_ip'] = str(item.header.x_originating_ip)
-                        data['x_mailer'] = str(item.header.x_mailer)
-                        data['boundary'] = str(item.header.boundary)
-                        data['from_address'] = str(item.header.from_)
-                        data['date'] = item.header.date.value
-                        if item.header.to:
-                            data['to'] = [str(r) for r in item.header.to.to_list()]
-                    res = handle_email_fields(data,
-                                            analyst,
-                                            "STIX")
-                    # Should check for attachments and add them here.
-                    self.parse_res(imp_type, obs, res)
-                    if res.get('status') and item.attachments:
-                        for attach in item.attachments:
-                            rel_id = attach.to_dict()['object_reference']
-                            self.relationships.append((obs.id_,
-                                                       "Contains",
-                                                       rel_id, "High"))
-                else: # try to parse all other possibilities as Indicator
-                    imp_type = "Indicator"
-                    obj = make_crits_object(item)
-                    if obj.object_type == 'Address':
-                        # This was already caught above
-                        continue
-                    else:
-                        ind_type = obj.object_type
-                        for value in obj.value:
-                            if value and ind_type:
-                                res = handle_indicator_ind(value.strip(),
-                                                        self.source,
-                                                        ind_type,
-                                                        IndicatorThreatTypes.UNKNOWN,
-                                                        IndicatorAttackTypes.UNKNOWN,
-                                                        analyst,
-                                                        add_domain=True,
-                                                        add_relationship=True)
-                                self.parse_res(imp_type, obs, res)
+                self.parse_object(obs.object_)
             except Exception, e: # probably caused by cybox object we don't handle
                 self.failed.append((e.message,
                                     type(item).__name__,
